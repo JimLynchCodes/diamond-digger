@@ -1,6 +1,6 @@
 const sqlite3 = require("sqlite3").verbose();
 
-const DATE = "2026-06-22";
+const DATE = "2026-06-23";
 const DB_FILE = "mlb.db";
 
 const API_DELAY_MS = 200;
@@ -17,100 +17,59 @@ const db = new sqlite3.Database(DB_FILE);
 // --------------------------------
 
 function sleep(ms) {
-
     return new Promise(resolve =>
         setTimeout(resolve, ms)
     );
-
 }
 
-
 function run(sql, params = []) {
-
     return new Promise((resolve, reject) => {
-
         db.run(sql, params, function(err) {
-
             if (err)
                 reject(err);
             else
                 resolve(this);
-
         });
-
     });
-
 }
-
-
 
 async function fetchJson(url) {
 
-
     while (true) {
-
 
         await sleep(
             API_DELAY_MS +
             Math.random() * API_DELAY_MS
         );
 
-
         console.log("GET:", url);
-
-
 
         const response =
             await fetch(url);
 
-
-
         if (response.status === 429) {
-
-
-            console.log(
-                "429 rate limit, sleeping..."
-            );
-
-
+            console.log("429 rate limit, sleeping...");
             await sleep(10000);
-
-
             continue;
-
         }
 
-
-
         if (!response.ok) {
-
-
             throw new Error(
                 `${response.status} ${url}`
             );
-
         }
 
-
-
         return response.json();
-
 
     }
 
 }
 
-
-
 function round3(value) {
-
     return Number(
         Number(value).toFixed(3)
     );
-
 }
-
-
 
 // --------------------------------
 // Database
@@ -118,28 +77,21 @@ function round3(value) {
 
 async function createTables() {
 
-
     await run(`
 
     CREATE TABLE IF NOT EXISTS ${PLAYERS_TABLE} (
 
         id INTEGER PRIMARY KEY AUTOINCREMENT,
 
-
         game_pk INTEGER,
-
 
         player_id INTEGER,
 
-
         player_name TEXT,
-
 
         home_away TEXT,
 
-
         lineup_position INTEGER,
-
 
         prob_0_h_r_rbi REAL,
 
@@ -152,6 +104,12 @@ async function createTables() {
         prob_1_plus_hits REAL,
 
         prob_2_plus_hits REAL,
+
+        prob_0_runs REAL,
+
+        prob_1_plus_runs REAL,
+
+        prob_2_plus_runs REAL,
 
         prob_0_rbi REAL,
 
@@ -171,11 +129,11 @@ async function createTables() {
 
         prob_2_plus_homeRuns REAL,
 
-        prob_0_strikOuts REAL,
+        prob_0_strikeOuts REAL,
 
-        prob_1_plus_strikOuts REAL,
+        prob_1_plus_strikeOuts REAL,
 
-        prob_2_plus_strikOuts REAL,
+        prob_2_plus_strikeOuts REAL,
 
 
         raw_stats_json TEXT,
@@ -187,17 +145,15 @@ async function createTables() {
 
     `);
 
-
 }
-
 
 
 // --------------------------------
 // Poisson
 // --------------------------------
 
-function poisson(lambda_h_r_rbi, lambda_hits, lambda_runs, lambda_rbis,
-    lambda_homeRuns, lambda_strikeOuts) {
+function poisson(lambda_h_r_rbi, lambda_hits, lambda_runs, lambda_rbi,
+    lambda_totalBases, lambda_homeRuns, lambda_strikeOuts) {
 
     const p0_h_r_rbi =
         Math.exp(-lambda_h_r_rbi);
@@ -222,6 +178,12 @@ function poisson(lambda_h_r_rbi, lambda_hits, lambda_runs, lambda_rbis,
 
     const p1_rbi =
         lambda_rbi * p0_rbi;
+
+    const p0_totalBases =
+        Math.exp(-lambda_totalBases);
+
+    const p1_totalBases =
+        lambda_totalBases * p0_totalBases;
 
     const p0_homeRuns =
         Math.exp(-lambda_homeRuns);
@@ -283,6 +245,16 @@ function poisson(lambda_h_r_rbi, lambda_hits, lambda_runs, lambda_rbis,
             round3(1 - p0_rbi - p1_rbi),
 
 
+        prob_0_totalBases:
+            round3(p0_totalBases),
+
+        prob_1_plus_totalBases:
+            round3(1 - p0_totalBases),
+
+        prob_2_plus_totalBases:
+            round3(1 - p0_totalBases - p1_totalBases),
+
+
         prob_0_homeRuns:
             round3(p0_homeRuns),
 
@@ -315,27 +287,12 @@ function poisson(lambda_h_r_rbi, lambda_hits, lambda_runs, lambda_rbis,
 
 function getBattingOrder(team) {
 
-
-    if (
-
-        team.battingOrder &&
-
-        team.battingOrder.length > 0
-
-    ) {
-
-
+    if (team.battingOrder &&  team.battingOrder.length > 0) {
         return team.battingOrder;
-
-
     }
 
-
     return [];
-
-
 }
-
 
 
 // --------------------------------
@@ -348,74 +305,31 @@ async function calculateBatter(
     side
 ) {
 
-
-    const url =
-
-        `https://statsapi.mlb.com/api/v1/people/${playerId}/stats` +
-
+    const url = `https://statsapi.mlb.com/api/v1/people/${playerId}/stats` +
         `?stats=season&group=hitting`;
-
-
 
     const stats =
         await fetchJson(url);
 
+    const split = stats?.stats?.[0]?.splits?.[0];
 
+    const stat = split?.stat;
 
-    const split =
+    const playerName = split?.player?.fullName ?? `Unknown ${playerId}`;
 
-        stats?.stats?.[0]
-
-            ?.splits?.[0];
-
-
-
-    const stat =
-        split?.stat;
-
-
-
-    const playerName =
-
-        split?.player?.fullName ??
-
-        `Unknown ${playerId}`;
-
-
-
-    console.log(
-
-        side,
-
-        lineupPosition + 1,
-
-        playerName
-
-    );
-
-
+    console.log(side, lineupPosition + 1, playerName);
 
     if (!stat) {
 
-
-        console.log(
-            "No stats:",
-            playerName
-        );
-
+        console.log("No stats:", playerName);
 
         return null;
 
-
     }
-
-
 
     const expectedPA = {
 
-
         home: [
-
             4.55,
             4.42,
             4.28,
@@ -425,9 +339,7 @@ async function calculateBatter(
             3.72,
             3.58,
             3.40
-
         ],
-
 
         away: [
             4.60,
@@ -439,12 +351,9 @@ async function calculateBatter(
             3.92,
             3.78,
             3.62
-
         ]
 
     };
-
-
 
     const projectedPA =
 
@@ -452,41 +361,9 @@ async function calculateBatter(
             Math.min(lineupPosition, 8)
         ];
 
+    const plateAppearances = Number(stat.plateAppearances ?? stat.atBats ?? 1);
 
-
-    const plateAppearances =
-
-        Number(
-
-            stat.plateAppearances ??
-
-            stat.atBats ??
-
-            1
-
-        );
-
-
-
-    const perPaRate_h_r_rbi =
-
-        (
-
-            Number(stat.hits || 0)
-
-            +
-
-            Number(stat.runs || 0)
-
-            +
-
-            Number(stat.rbi || 0)
-
-        )
-
-        /
-
-        plateAppearances;
+    const perPaRate_h_r_rbi = (Number(stat.hits || 0) + Number(stat.runs || 0) + Number(stat.rbi || 0)) / plateAppearances;
 
     const perPaRate_hits = Number(stat.hits || 0) / plateAppearances;
     const perPaRate_runs = Number(stat.runs || 0) / plateAppearances;
@@ -496,48 +373,19 @@ async function calculateBatter(
     const perPaRate_strikeOuts = Number(stat.strikeOuts || 0) / plateAppearances;
 
 
-    const lambda_h_r_rbi =
+    const lambda_h_r_rbi = perPaRate_h_r_rbi * projectedPA;
 
-        perPaRate_h_r_rbi *
+    const lambda_hits = perPaRate_hits * projectedPA;
 
-        projectedPA;
+    const lambda_runs = perPaRate_runs * projectedPA;
 
-    const lambda_hits =
+    const lambda_rbis = perPaRate_rbis * projectedPA;
 
-        perPaRate_hits *
+    const lambda_homeRuns = perPaRate_homeRuns * projectedPA;
 
-        projectedPA;
+    const lambda_totalBases = perPaRate_totalBases * projectedPA;
 
-    const lambda_runs =
-
-        perPaRate_runs *
-
-        projectedPA;
-
-    const lambda_rbis =
-
-        perPaRate_rbis *
-
-        projectedPA;
-
-    const lambda_homeRuns =
-
-        perPaRate_homeRuns *
-
-        projectedPA;
-
-    const lambda_totalBases =
-
-        perPaRate_totalBases *
-
-        projectedPA;
-
-    const lambda_strikeOuts =
-
-        perPaRate_strikeOuts *
-
-        projectedPA;
-
+    const lambda_strikeOuts = perPaRate_strikeOuts * projectedPA;
 
     return {
 
@@ -554,15 +402,13 @@ async function calculateBatter(
         // lambda_strikeOuts: round3(lambda_strikeOuts),
 
         ...poisson(lambda_h_r_rbi, lambda_hits, lambda_runs, 
-            lambda_rbis, lambda_homeRuns, lambda_totalBases, lambda_strikeOuts),
+            lambda_rbis, lambda_totalBases, lambda_homeRuns, lambda_strikeOuts),
 
         raw_stats: stats
 
     };
 
-
 }
-
 
 
 // --------------------------------
@@ -575,7 +421,6 @@ async function saveProjection(
     lineupPosition,
     projection
 ) {
-
 
     await run(`
 
@@ -600,11 +445,13 @@ async function saveProjection(
 
         prob_2_plus_h_r_rbi,
 
+
         prob_0_hits,
 
         prob_1_plus_hits,
 
         prob_2_plus_hits,
+
 
         prob_0_runs,
 
@@ -612,11 +459,13 @@ async function saveProjection(
 
         prob_2_plus_runs,
 
+
         prob_0_rbi,
 
         prob_1_plus_rbi,
 
         prob_2_plus_rbi,
+
 
         prob_0_totalBases,
 
@@ -624,11 +473,13 @@ async function saveProjection(
 
         prob_2_plus_totalBases,
 
+
         prob_0_homeRuns,
 
         prob_1_plus_homeRuns,
 
         prob_2_plus_homeRuns,
+
 
         prob_0_strikeOuts,
 
@@ -641,17 +492,14 @@ async function saveProjection(
 
     )
 
-
     VALUES
 
-    (?,?,?,?,?,?,?,?,?,?,?,?)
-
+    (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
 
 
     ON CONFLICT(game_pk, player_id)
 
     DO UPDATE SET
-
 
         player_name = excluded.player_name,
 
@@ -665,11 +513,13 @@ async function saveProjection(
 
         prob_2_plus_h_r_rbi = excluded.prob_2_plus_h_r_rbi,
 
+
         prob_0_hits = excluded.prob_0_hits,
 
         prob_1_plus_hits = excluded.prob_1_plus_hits,
 
         prob_2_plus_hits = excluded.prob_2_plus_hits,
+
 
         prob_0_runs = excluded.prob_0_runs,
 
@@ -677,11 +527,13 @@ async function saveProjection(
 
         prob_2_plus_runs = excluded.prob_2_plus_runs,
 
+
         prob_0_rbi = excluded.prob_0_rbi,
 
         prob_1_plus_rbi = excluded.prob_1_plus_rbi,
 
         prob_2_plus_rbi = excluded.prob_2_plus_rbi,
+
 
         prob_0_totalBases = excluded.prob_0_totalBases,
 
@@ -689,11 +541,13 @@ async function saveProjection(
 
         prob_2_plus_totalBases = excluded.prob_2_plus_totalBases,
 
+
         prob_0_homeRuns = excluded.prob_0_homeRuns,
 
         prob_1_plus_homeRuns = excluded.prob_1_plus_homeRuns,
 
         prob_2_plus_homeRuns = excluded.prob_2_plus_homeRuns,
+
 
         prob_0_strikeOuts = excluded.prob_0_strikeOuts,
 
@@ -725,11 +579,13 @@ async function saveProjection(
 
         projection.prob_2_plus_h_r_rbi,
 
+
         projection.prob_0_hits,
 
         projection.prob_1_plus_hits,
 
         projection.prob_2_plus_hits,
+
 
         projection.prob_0_runs,
 
@@ -737,11 +593,13 @@ async function saveProjection(
 
         projection.prob_2_plus_runs,
 
+
         projection.prob_0_rbi,
 
         projection.prob_1_plus_rbi,
 
         projection.prob_2_plus_rbi,
+
 
         projection.prob_0_totalBases,
 
@@ -749,11 +607,13 @@ async function saveProjection(
 
         projection.prob_2_plus_totalBases,
 
+
         projection.prob_0_homeRuns,
 
         projection.prob_1_plus_homeRuns,
 
         projection.prob_2_plus_homeRuns,
+
 
         projection.prob_0_strikeOuts,
 
@@ -783,14 +643,11 @@ async function processTeam(
     side
 ) {
 
-
     console.log(
         side,
         "PLAYERS",
         battingOrder.length
     );
-
-
 
     for (
         let i = 0;
@@ -798,30 +655,12 @@ async function processTeam(
         i++
     ) {
 
+        const playerId = battingOrder[i];
 
-        const playerId =
-            battingOrder[i];
-
-
-
-        const projection =
-
-            await calculateBatter(
-
-                playerId,
-
-                i,
-
-                side
-
-            );
-
-
+        const projection = await calculateBatter(playerId, i, side);
 
         if (!projection)
             continue;
-
-
 
         await saveProjection(
 
@@ -851,8 +690,6 @@ async function main() {
 
     await createTables();
 
-
-
     const schedule =
 
         await fetchJson(
@@ -864,94 +701,36 @@ async function main() {
         );
 
 
-
     for (const day of schedule.dates ?? []) {
-
 
         for (const game of day.games ?? []) {
 
+            console.log("\nGAME", game.gamePk);
 
-            console.log(
-                "\nGAME",
-                game.gamePk
-            );
+            const boxscore = await fetchJson(`https://statsapi.mlb.com/api/v1/game/${game.gamePk}/boxscore`);
 
+            const homeOrder = getBattingOrder(boxscore.teams.home);
 
+            const awayOrder = getBattingOrder(boxscore.teams.away);
 
-            const boxscore =
+            await processTeam(game.gamePk, homeOrder, "home");
 
-                await fetchJson(
-
-                    `https://statsapi.mlb.com/api/v1/game/${game.gamePk}/boxscore`
-
-                );
-
-
-
-            const homeOrder =
-
-                getBattingOrder(
-                    boxscore.teams.home
-                );
-
-
-
-            const awayOrder =
-
-                getBattingOrder(
-                    boxscore.teams.away
-                );
-
-
-
-            await processTeam(
-
-                game.gamePk,
-
-                homeOrder,
-
-                "home"
-
-            );
-
-
-
-            await processTeam(
-
-                game.gamePk,
-
-                awayOrder,
-
-                "away"
-
-            );
-
+            await processTeam(game.gamePk, awayOrder, "away");
 
         }
 
     }
 
-
-
     db.close();
-
 
     console.log("DONE");
 
-
 }
-
 
 
 main()
 
 .catch(err => {
-
-
     console.error(err);
-
-
     db.close();
-
-
 });
