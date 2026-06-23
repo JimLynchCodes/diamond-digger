@@ -3,7 +3,7 @@ const sqlite3 = require("sqlite3").verbose();
 const DATE = "2026-06-22";
 const DB_FILE = "mlb.db";
 
-const API_DELAY_MS = 2000;
+const API_DELAY_MS = 200;
 
 const safeDate = DATE.replace(/-/g, "_");
 
@@ -141,18 +141,41 @@ async function createTables() {
         lineup_position INTEGER,
 
 
-        lambda_h_r_rbi REAL,
-
-
         prob_0_h_r_rbi REAL,
-
-        prob_1_h_r_rbi REAL,
 
         prob_1_plus_h_r_rbi REAL,
 
         prob_2_plus_h_r_rbi REAL,
 
-        prob_0_or_1_h_r_rbi REAL,
+        prob_0_hits REAL,
+
+        prob_1_plus_hits REAL,
+
+        prob_2_plus_hits REAL,
+
+        prob_0_rbi REAL,
+
+        prob_1_plus_rbi REAL,
+
+        prob_2_plus_rbi REAL,
+
+        prob_0_totalBases REAL,
+
+        prob_1_plus_totalBases REAL,
+
+        prob_2_plus_totalBases REAL,
+
+        prob_0_homeRuns REAL,
+
+        prob_1_plus_homeRuns REAL,
+
+        prob_2_plus_homeRuns REAL,
+
+        prob_0_strikOuts REAL,
+
+        prob_1_plus_strikOuts REAL,
+
+        prob_2_plus_strikOuts REAL,
 
 
         raw_stats_json TEXT,
@@ -173,39 +196,112 @@ async function createTables() {
 // Poisson
 // --------------------------------
 
-function poisson(lambda) {
+function poisson(lambda_h_r_rbi, lambda_hits, lambda_runs, lambda_rbis,
+    lambda_homeRuns, lambda_strikeOuts) {
 
+    const p0_h_r_rbi =
+        Math.exp(-lambda_h_r_rbi);
 
-    const p0 =
-        Math.exp(-lambda);
+    const p1_h_r_rbi =
+        lambda_h_r_rbi * p0_h_r_rbi;
 
+    const p0_hits =
+        Math.exp(-lambda_hits);
 
-    const p1 =
-        lambda * p0;
+    const p1_hits =
+        lambda_hits * p0_hits;
+        
+    const p0_runs =
+        Math.exp(-lambda_runs);
 
+    const p1_runs =
+        lambda_runs * p0_runs;
 
+    const p0_rbi =
+        Math.exp(-lambda_rbi);
+
+    const p1_rbi =
+        lambda_rbi * p0_rbi;
+
+    const p0_homeRuns =
+        Math.exp(-lambda_homeRuns);
+
+    const p1_homeRuns =
+        lambda_homeRuns * p0_homeRuns;
+
+    const p0_strikeOuts =
+        Math.exp(-lambda_strikeOuts);
+
+    const p1_strikeOuts =
+        lambda_strikeOuts * p0_strikeOuts;
 
     return {
 
-
         prob_0_h_r_rbi:
-            round3(p0),
+            round3(p0_h_r_rbi),
 
-
-        prob_1_h_r_rbi:
-            round3(p1),
-
+        // prob_1_h_r_rbi:
+        //     round3(p1_h_r_rbi),
 
         prob_1_plus_h_r_rbi:
-            round3(1 - p0),
-
+            round3(1 - p0_h_r_rbi),
 
         prob_2_plus_h_r_rbi:
-            round3(1 - p0 - p1),
+            round3(1 - p0_h_r_rbi - p1_h_r_rbi),
+
+        // prob_0_or_1_h_r_rbi:
+        //     round3(p0_h_r_rbi + p1_h_r_rbi),
 
 
-        prob_0_or_1_h_r_rbi:
-            round3(p0 + p1)
+        prob_0_hits:
+            round3(p0_hits),
+
+        prob_1_plus_hits:
+            round3(1 - p0_hits),
+
+        prob_2_plus_hits:
+            round3(1 - p0_hits - p1_hits),
+
+
+        prob_0_runs:
+            round3(p0_runs),
+
+        prob_1_plus_runs:
+            round3(1 - p0_runs),
+
+        prob_2_plus_runs:
+            round3(1 - p0_runs - p1_runs),
+
+
+        prob_0_rbi:
+            round3(p0_rbi),
+
+        prob_1_plus_rbi:
+            round3(1 - p0_rbi),
+
+        prob_2_plus_rbi:
+            round3(1 - p0_rbi - p1_rbi),
+
+
+        prob_0_homeRuns:
+            round3(p0_homeRuns),
+
+        prob_1_plus_homeRuns:
+            round3(1 - p0_homeRuns),
+
+        prob_2_plus_homeRuns:
+            round3(1 - p0_homeRuns - p1_homeRuns),
+
+
+        prob_0_strikeOuts:
+            round3(p0_strikeOuts),
+
+        prob_1_plus_strikeOuts:
+            round3(1 - p0_strikeOuts),
+
+        prob_2_plus_strikeOuts:
+            round3(1 - p0_strikeOuts - p1_strikeOuts),
+
 
     };
 
@@ -334,7 +430,6 @@ async function calculateBatter(
 
 
         away: [
-
             4.60,
             4.54,
             4.45,
@@ -373,8 +468,7 @@ async function calculateBatter(
 
 
 
-    const rate =
-
+    const perPaRate_h_r_rbi =
 
         (
 
@@ -394,37 +488,75 @@ async function calculateBatter(
 
         plateAppearances;
 
+    const perPaRate_hits = Number(stat.hits || 0) / plateAppearances;
+    const perPaRate_runs = Number(stat.runs || 0) / plateAppearances;
+    const perPaRate_rbis = Number(stat.rbi || 0) / plateAppearances;
+    const perPaRate_homeRuns = Number(stat.homeRuns || 0) / plateAppearances;
+    const perPaRate_totalBases = Number(stat.totalBases || 0) / plateAppearances;
+    const perPaRate_strikeOuts = Number(stat.strikeOuts || 0) / plateAppearances;
 
 
-    const lambda =
+    const lambda_h_r_rbi =
 
-        rate *
+        perPaRate_h_r_rbi *
+
+        projectedPA;
+
+    const lambda_hits =
+
+        perPaRate_hits *
+
+        projectedPA;
+
+    const lambda_runs =
+
+        perPaRate_runs *
+
+        projectedPA;
+
+    const lambda_rbis =
+
+        perPaRate_rbis *
+
+        projectedPA;
+
+    const lambda_homeRuns =
+
+        perPaRate_homeRuns *
+
+        projectedPA;
+
+    const lambda_totalBases =
+
+        perPaRate_totalBases *
+
+        projectedPA;
+
+    const lambda_strikeOuts =
+
+        perPaRate_strikeOuts *
 
         projectedPA;
 
 
-
     return {
-
 
         player_name: playerName,
 
-
         home_away: side,
 
+        // lambda_h_r_rbi: round3(lambda_h_r_rbi),
+        // lambda_hits: round3(lambda_hits),
+        // lambda_runs: round3(lambda_runs),
+        // lambda_rbis: round3(lambda_rbis),
+        // lambda_homeRuns: round3(lambda_homeRuns),
+        // lambda_totalBases: round3(lambda_totalBases),
+        // lambda_strikeOuts: round3(lambda_strikeOuts),
 
-        lambda_h_r_rbi:
-
-            round3(lambda),
-
-
-
-        ...poisson(lambda),
-
-
+        ...poisson(lambda_h_r_rbi, lambda_hits, lambda_runs, 
+            lambda_rbis, lambda_homeRuns, lambda_totalBases, lambda_strikeOuts),
 
         raw_stats: stats
-
 
     };
 
@@ -462,18 +594,47 @@ async function saveProjection(
         lineup_position,
 
 
-        lambda_h_r_rbi,
-
-
         prob_0_h_r_rbi,
-
-        prob_1_h_r_rbi,
 
         prob_1_plus_h_r_rbi,
 
         prob_2_plus_h_r_rbi,
 
-        prob_0_or_1_h_r_rbi,
+        prob_0_hits,
+
+        prob_1_plus_hits,
+
+        prob_2_plus_hits,
+
+        prob_0_runs,
+
+        prob_1_plus_runs,
+
+        prob_2_plus_runs,
+
+        prob_0_rbi,
+
+        prob_1_plus_rbi,
+
+        prob_2_plus_rbi,
+
+        prob_0_totalBases,
+
+        prob_1_plus_totalBases,
+
+        prob_2_plus_totalBases,
+
+        prob_0_homeRuns,
+
+        prob_1_plus_homeRuns,
+
+        prob_2_plus_homeRuns,
+
+        prob_0_strikeOuts,
+
+        prob_1_plus_strikeOuts,
+
+        prob_2_plus_strikeOuts,
 
 
         raw_stats_json
@@ -498,17 +659,48 @@ async function saveProjection(
 
         lineup_position = excluded.lineup_position,
 
-        lambda_h_r_rbi = excluded.lambda_h_r_rbi,
-
         prob_0_h_r_rbi = excluded.prob_0_h_r_rbi,
-
-        prob_1_h_r_rbi = excluded.prob_1_h_r_rbi,
 
         prob_1_plus_h_r_rbi = excluded.prob_1_plus_h_r_rbi,
 
         prob_2_plus_h_r_rbi = excluded.prob_2_plus_h_r_rbi,
 
-        prob_0_or_1_h_r_rbi = excluded.prob_0_or_1_h_r_rbi,
+        prob_0_hits = excluded.prob_0_hits,
+
+        prob_1_plus_hits = excluded.prob_1_plus_hits,
+
+        prob_2_plus_hits = excluded.prob_2_plus_hits,
+
+        prob_0_runs = excluded.prob_0_runs,
+
+        prob_1_plus_runs = excluded.prob_1_plus_runs,
+
+        prob_2_plus_runs = excluded.prob_2_plus_runs,
+
+        prob_0_rbi = excluded.prob_0_rbi,
+
+        prob_1_plus_rbi = excluded.prob_1_plus_rbi,
+
+        prob_2_plus_rbi = excluded.prob_2_plus_rbi,
+
+        prob_0_totalBases = excluded.prob_0_totalBases,
+
+        prob_1_plus_totalBases = excluded.prob_1_plus_totalBases,
+
+        prob_2_plus_totalBases = excluded.prob_2_plus_totalBases,
+
+        prob_0_homeRuns = excluded.prob_0_homeRuns,
+
+        prob_1_plus_homeRuns = excluded.prob_1_plus_homeRuns,
+
+        prob_2_plus_homeRuns = excluded.prob_2_plus_homeRuns,
+
+        prob_0_strikeOuts = excluded.prob_0_strikeOuts,
+
+        prob_1_plus_strikeOuts = excluded.prob_1_plus_strikeOuts,
+
+        prob_2_plus_strikeOuts = excluded.prob_2_plus_strikeOuts,
+
 
         raw_stats_json = excluded.raw_stats_json
 
@@ -527,19 +719,47 @@ async function saveProjection(
 
         lineupPosition + 1,
 
-
-        projection.lambda_h_r_rbi,
-
-
         projection.prob_0_h_r_rbi,
-
-        projection.prob_1_h_r_rbi,
 
         projection.prob_1_plus_h_r_rbi,
 
         projection.prob_2_plus_h_r_rbi,
 
-        projection.prob_0_or_1_h_r_rbi,
+        projection.prob_0_hits,
+
+        projection.prob_1_plus_hits,
+
+        projection.prob_2_plus_hits,
+
+        projection.prob_0_runs,
+
+        projection.prob_1_plus_runs,
+
+        projection.prob_2_plus_runs,
+
+        projection.prob_0_rbi,
+
+        projection.prob_1_plus_rbi,
+
+        projection.prob_2_plus_rbi,
+
+        projection.prob_0_totalBases,
+
+        projection.prob_1_plus_totalBases,
+
+        projection.prob_2_plus_totalBases,
+
+        projection.prob_0_homeRuns,
+
+        projection.prob_1_plus_homeRuns,
+
+        projection.prob_2_plus_homeRuns,
+
+        projection.prob_0_strikeOuts,
+
+        projection.prob_1_plus_strikeOuts,
+
+        projection.prob_2_plus_strikeOuts,
 
 
         JSON.stringify(
