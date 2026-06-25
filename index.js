@@ -1,6 +1,6 @@
 const sqlite3 = require("sqlite3").verbose();
 
-const DATE = "2026-06-23";
+const DATE = "2026-06-24";
 const DB_FILE = "mlb.db";
 
 const API_DELAY_MS = 200;
